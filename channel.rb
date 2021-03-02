@@ -42,7 +42,7 @@ service = Google::Apis::CalendarV3::CalendarService.new
 service.client_options.application_name = APPLICATION_NAME
 service.authorization = authorize
 
-CALLBACK_URL = "https://calmana.swlab.cs.okayama-u.ac.jp/watch"
+CALLBACK_URL = <YOUR_CALLBACK_URL>
 CALENDAR_ID = "primary"
 
 req = Google::Apis::CalendarV3::Channel.new
