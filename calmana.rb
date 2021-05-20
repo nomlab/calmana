@@ -70,7 +70,7 @@ CREDENTIALS_PATH = "credentials.json".freeze
 # created automatically when the authorization flow completes for the first
 # time.
 TOKEN_PATH = "token.yaml".freeze
-SCOPE = Google::Apis::CalendarV3::AUTH_CALENDAR_READONLY
+SCOPE = Google::Apis::CalendarV3::AUTH_CALENDAR
 CALLBACK_URL = 'https://calmana.swlab.cs.okayama-u.ac.jp'
 CALENDAR_ID = 'primary'
     
