@@ -11,58 +11,6 @@ require 'pstore'
 set :port, 40024
 set :bind, '0.0.0.0'
 
-
-class Channel
-  def new()
-  end
-
-  def make_channel
-    begin
-      req = Google::Apis::CalendarV3::Channel.new
-      req.id = SecureRandom.uuid
-      req.type = 'web_hook'
-      req.address = CALLBACK_URL
-      result = service.watch_event(CALENDAR_ID,
-                                   req)
-    end
-    
-  end
-
-  def get_event
-    result = service.list_events(CALENDAR_ID)
-    set = YAML.load_file('settings.yaml')
-    calendars = set["calendar_list"]
-    calendars.each do |calendar|
-      name = calendar["name"]
-      calendar_id = calendar["calendar_id"]
-      next_sync_token = calendar["next_sync_token"]
-      page_token = nil
-      if next_sync_token.nul?
-        response = service.list_events(calendar_id)
-        while response.next_sync_token.nil?
-          response = service.list_events(calendar_id,
-                                         page_token: response.next_page_token)
-        end
-        calendar["next_sync_token"] = response.next_sync_token
-      else
-        response = service.list_events(calendar_id,
-                                       sync_token: next_sync_token)
-        calendar["next_sync_token"] = response.next_sync_token
-        if !response.items.empty?
-          puts response.summary
-          response.items.each do |e|
-            open(File.dirname(__FILE__) + "/db/" + name + ".json", "a") do |f|
-              f.write(JSON.pretty_generate(e.to_h))
-              f.write(",\n")
-              f.close
-            end
-          end
-        end
-      end
-    end
-  end
-end
-
 OOB_URI = "urn:ietf:wg:oauth:2.0:oob".freeze
 APPLICATION_NAME = "Calmana".freeze
 CREDENTIALS_PATH = "credentials.json".freeze
@@ -71,8 +19,6 @@ CREDENTIALS_PATH = "credentials.json".freeze
 # time.
 TOKEN_PATH = "token.yaml".freeze
 SCOPE = Google::Apis::CalendarV3::AUTH_CALENDAR
-CALLBACK_URL = 'https://calmana.swlab.cs.okayama-u.ac.jp'
-CALENDAR_ID = 'primary'
     
 ##
 # Ensure valid credentials, either by restoring from the saved credentials
@@ -98,11 +44,25 @@ def authorize
   credentials
 end
 
+def extract_calendar(uri)
+  calendar_id = uri.split(File::SEPARATOR)[6]
+  return calendar_id
+end
+
+def stop_channel(id, resource_id)
+  channel = Google::Apis::CalendarV3::Channel.new(
+    id: id,
+    resource_id: resource_id)
+  response = @service.stop_channel(channel)
+  printf(response)
+end
+
 before do
   # Initialize the API
   @service = Google::Apis::CalendarV3::CalendarService.new
   @service.client_options.application_name = APPLICATION_NAME
   @service.authorization = authorize
+  @hash = Hash.new{ |h, k| h[k] = {} }
 end
 
 get '/' do
@@ -113,41 +73,30 @@ get '/watch' do
   'watch'
 end
 
-get "/.well-known/acme-challenge/:name"do |n|
-  Net::HTTP.start("www.swlab.cs.okayama-u.ac.jp") do |http|
-    res = http.get("/.well-known/acme-challenge/#{n}")
-    open(".well-known/acme-challenge/#{n}", "wb"){|f|
-      f.write(res)
-      f.write(res.body)
-    }
-    res.body
-  end
-end
-
 post '/watch' do
-  set = YAML.load_file('settings.yaml')
-
-  File.open("test.log", "a") do |f|
-    headers = request.env.select { |k, v| k.start_with?("HTTP_") }
-    f.write(headers["HTTP_X_GOOG_RESOURCE_STATE"] == "exists")
-    if headers["HTTP_X_GOOG_RESOURCE_STATE"] == "exists" 
-      headers.each do |k, v|
-        f.write("#{k}->#{v}\n")
-        # response = service.list_events(calendar_id,
-        #                                sync_token: )
-      end
-    elsif headers["HTTP_X_GOOG_RESOURCE_STATE"] == "sync"
-      calendar_id = headers["HTTP_X_GOOG_RESOURCE_ID"]
-      calendar = set[calendar_id]
-      response = @service.list_events(calendar_id)
-      while response.next_sync_token.nil?
-        response = @service.list_events(calendar_id,
-                                       page_token: response.next_page_token)
-      end
-      calendar["next_sync_token"] = response.next_sync_token
-      calendar["expiration"] = headers["HTTP_X_GOOG_EXPIRATION"]
-    end
+  headers = request.env.select { |k, v| k.start_with?("HTTP_") }
+  if headers["HTTP_X_GOOG_RESOURCE_STATE"] == "exists"
+    # stop_channel(headers["HTTP_X_GOOG_CHANNEL_ID"], headers["HTTP_X_GOOG_RESOURCE_ID"])
     
-    f.write("#{headers.class}\n")
-  end
+    calendar_id = extract_calendar(headers["HTTP_X_GOOG_RESOURCE_URI"])
+    printf("#{@hash}")
+    response = @service.list_events(calendar_id: calendar_id,
+                                    sync_token: @hash["#{calendar_id}"]["next_sync_token"])
+    File.open("result.log","a") do |f|
+      response.items.each do |e|
+        f.write("#{e.summary}\n")
+      end
+    end
+    hash["#{calendar_id}"]["next_sync_token"] = response.next_page_token
+
+  elsif headers["HTTP_X_GOOG_RESOURCE_STATE"] == "sync"
+    calendar_id = extract_calendar(headers["HTTP_X_GOOG_RESOURCE_URI"])
+    response = @service.list_events(calendar_id)
+    while response.next_sync_token.nil?
+      response = @service.list_events(calendar_id,
+                                      page_token: response.next_page_token)
+    end
+    @hash["#{calendar_id}"]["next_sync_token"] = response.next_sync_token
+    @hash["#{calendar_id}"]["expiration"] = headers["HTTP_X_GOOG_CHANNEL_EXPIRATION"]
+  end  
 end
