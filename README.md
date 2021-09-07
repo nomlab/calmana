@@ -1,4 +1,4 @@
-#calmana
+# calmana
 + 動作環境
   + ruby 2.5.5
   + bundle 2.1.4
@@ -6,7 +6,7 @@
 + 説明
   + Google Calendar APIのWatchを利用した，Google Calendar上の変更を監視するシステム
 
-# Setup
+## Setup
 + Clone code
   ```
   $ git clone git@github.com:nakazono0424/calmana.git
@@ -19,12 +19,41 @@
 
 + aouthorize
   ```
-  $ bundle exec ruby channel.rb
+  $ bundle exec ruby calmana.rb
   ```
   この際，Google Calendar API の credentials.json が必要になる．
   + [Google API console](https://console.developers.google.com)
   
   認証に成功すると，`Aouthorize Success!`と表示される．
+
+## Run
++ サーバの起動
+  ```
+  bundle exec ruby calmana.rb 
+  ```
+  
++ Channel の作成
+  + コード中に CALLBACK URL を記述（settings.yml など別ファイルから読み込めるように変更予定）
+
+  + 監視するカレンダの calendar id を指定して実行
+  ```
+  bundle exec ruby channel.rb make <calendar ID>
+  ```
+  + 現時点では作成可能なチャンネルは一つのみ（今後改善予定）
+  
++ 変更された予定の情報は `result/` 以下に保存
+  
+### or
+
++ スクリプトを実行(未実装)
+  ```
+  sh scripts/launch.sh start
+  ```
+  
+## 今後の実装予定
++ `settings.yml` から CALLBACK URL など必要な情報の読み込み
++ Channel の複数作成への対応
++ 実行スクリプトの作成
 
 # HTTPS の設定
 + 前提
