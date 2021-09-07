@@ -3,6 +3,7 @@ require "googleauth"
 require "googleauth/stores/file_token_store"
 require "date"
 require "fileutils"
+require "json"
 
 OOB_URI = "urn:ietf:wg:oauth:2.0:oob".freeze
 APPLICATION_NAME = "Google Calendar API Ruby Quickstart".freeze
@@ -12,6 +13,7 @@ CREDENTIALS_PATH = "credentials.json".freeze
 # time.
 TOKEN_PATH = "token.yaml".freeze
 SCOPE = Google::Apis::CalendarV3::AUTH_CALENDAR
+CALLBACK_URL = <CALLBACK URL>
 
 ##
 # Ensure valid credentials, either by restoring from the saved credentials
@@ -37,20 +39,47 @@ def authorize
   credentials
 end
 
+def make_channel(calendar_id)
+  req = Google::Apis::CalendarV3::Channel.new
+  req.id = SecureRandom.uuid
+  req.type = 'web_hook'
+  req.address = CALLBACK_URL
+  result = @service.watch_event(calendar_id,
+                               req)
+  File.open("channel.json", "w") do |f|
+    JSON.dump(result,f)
+  end  
+end
+
+# id = headers["HTTP_X_GOOG_CHANNEL_ID"]
+# resource_id = headers["HTTP_X_GOOG_RESOURCE_ID"]
+def stop_channel(id, resource_id)
+  channel = Google::Apis::CalendarV3::Channel.new(
+    id: id,
+    resource_id: resource_id)
+  response = @service.stop_channel(channel)
+  puts "Success!"
+end
+
 # Initialize the API
-service = Google::Apis::CalendarV3::CalendarService.new
-service.client_options.application_name = APPLICATION_NAME
-service.authorization = authorize
+@service = Google::Apis::CalendarV3::CalendarService.new
+@service.client_options.application_name = APPLICATION_NAME
+@service.authorization = authorize
 
-CALLBACK_URL = <CALLBACKURL>
-CALENDAR_ID = <CALENDAR_ID>
 
-req = Google::Apis::CalendarV3::Channel.new
-req.id = SecureRandom.uuid
-req.type = 'web_hook'
-req.address = CALLBACK_URL
-result = service.watch_event(CALENDAR_ID,
-                             req)
-# result = service.stop_channel()
-
-puts result
+if ARGV[0] == "make"
+  if File.exist?("channel.json")
+    puts "Channel already exsits."
+  else
+    make_channel(ARGV[1])
+  end
+elsif ARGV[0] == "stop"
+  id , resource_id = nil, nil
+  File.open("channel.json") do |f|
+    hash = JSON.load(f)
+    id = hash["id"]
+    resource_id = hash["resourceId"]
+  end
+  stop_channel(id, resource_id)
+  File.delete("channel.json")
+end

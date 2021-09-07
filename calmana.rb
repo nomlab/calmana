@@ -1,3 +1,5 @@
+# coding: utf-8
+require 'bundler/setup'
 require 'sinatra'
 require 'googleauth'
 require 'googleauth/stores/file_token_store'
@@ -49,20 +51,11 @@ def extract_calendar(uri)
   return calendar_id
 end
 
-def stop_channel(id, resource_id)
-  channel = Google::Apis::CalendarV3::Channel.new(
-    id: id,
-    resource_id: resource_id)
-  response = @service.stop_channel(channel)
-  printf(response)
-end
-
 before do
   # Initialize the API
   @service = Google::Apis::CalendarV3::CalendarService.new
   @service.client_options.application_name = APPLICATION_NAME
   @service.authorization = authorize
-  @hash = Hash.new{ |h, k| h[k] = {} }
 end
 
 get '/' do
@@ -74,29 +67,57 @@ get '/watch' do
 end
 
 post '/watch' do
+  hash = Hash.new{ |h, k| h[k] = {} }
   headers = request.env.select { |k, v| k.start_with?("HTTP_") }
-  if headers["HTTP_X_GOOG_RESOURCE_STATE"] == "exists"
-    # stop_channel(headers["HTTP_X_GOOG_CHANNEL_ID"], headers["HTTP_X_GOOG_RESOURCE_ID"])
-    
-    calendar_id = extract_calendar(headers["HTTP_X_GOOG_RESOURCE_URI"])
-    printf("#{@hash}")
-    response = @service.list_events(calendar_id: calendar_id,
-                                    sync_token: @hash["#{calendar_id}"]["next_sync_token"])
-    File.open("result.log","a") do |f|
-      response.items.each do |e|
-        f.write("#{e.summary}\n")
-      end
-    end
-    hash["#{calendar_id}"]["next_sync_token"] = response.next_page_token
 
-  elsif headers["HTTP_X_GOOG_RESOURCE_STATE"] == "sync"
+  ## 予定の変更が行われたときの処理
+  if headers["HTTP_X_GOOG_RESOURCE_STATE"] == "exists"
+    # next_sync_token, expiration が保存された config.json を読み込み
+    File.open("config.json") do |f|
+      hash = JSON.load(f)
+    end
+
+    puts hash
+
+    # カレンダID を取得
     calendar_id = extract_calendar(headers["HTTP_X_GOOG_RESOURCE_URI"])
+
+    # 変更された予定を取得
+    response = @service.list_events(calendar_id,
+                                    sync_token: hash["next_sync_token"])
+
+    # 変更内容を保存
+    file_name = DateTime.now.strftime("%Y%m%d%H%M%S")
+    File.open("result/#{file_name}.json","a") do |f|
+      JSON.dump(response, f)
+    end
+
+    # config.json の next_sync_token を書き換え
+    hash["next_sync_token"] = response.next_sync_token
+    puts hash
+    File.open("config.json", "w") do |f|
+      JSON.dump(hash, f)
+    end
+
+  ## チャンネルが作成されたときの処理 
+  elsif headers["HTTP_X_GOOG_RESOURCE_STATE"] == "sync"
+    # カレンダID を取得
+    calendar_id = extract_calendar(headers["HTTP_X_GOOG_RESOURCE_URI"])
+
+    # Google Calendar API の Events:list を繰り返し実行することで
+    # next_page_token を取得
     response = @service.list_events(calendar_id)
     while response.next_sync_token.nil?
       response = @service.list_events(calendar_id,
                                       page_token: response.next_page_token)
     end
-    @hash["#{calendar_id}"]["next_sync_token"] = response.next_sync_token
-    @hash["#{calendar_id}"]["expiration"] = headers["HTTP_X_GOOG_CHANNEL_EXPIRATION"]
+
+    # next_page_token，expiration を config.json に保存
+    # (現時点では expiration をうまく活用できていない)
+    hash["next_sync_token"] = response.next_sync_token
+    hash["expiration"] = headers["HTTP_X_GOOG_CHANNEL_EXPIRATION"]
+    File.open("config.json", "w") do |f|
+      JSON.dump(hash, f)
+    end
   end  
 end
