@@ -6,6 +6,10 @@
 + 説明
   + Google Calendar APIのWatchを利用した，Google Calendar上の変更を監視するシステム
 
++ 機能
+  + 変更が行われた予定のデータを取得・保存
+  + 過去の変更履歴からユーザの操作を推測
+
 ## Setup
 + Clone code
   ```
@@ -54,6 +58,7 @@
 + `settings.yml` から CALLBACK URL など必要な情報の読み込み
 + Channel の複数作成への対応
 + 実行スクリプトの作成
++ 予測部 heron との連携
 
 # HTTPS の設定
 + 前提
