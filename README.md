@@ -46,6 +46,12 @@
   + 現時点では作成可能なチャンネルは一つのみ（今後改善予定）
   
 + 変更された予定の情報は `result/` 以下に保存
+
++ チャンネルの削除
+  + 監視するカレンダの calendar id を指定して実行
+  ```
+  bundle exec ruby channel.rb make <calendar ID>
+  ```
   
 ### or
 
