@@ -10,6 +10,9 @@ require 'fileutils'
 require 'json'
 require 'net/http'
 require 'pstore'
+require 'uri'
+require 'systemu'
+require 'open3'
 
 set :port, 40024
 set :bind, '0.0.0.0'
@@ -22,6 +25,7 @@ CREDENTIALS_PATH = "credentials.json".freeze
 # time.
 TOKEN_PATH = "token.yaml".freeze
 SCOPE = Google::Apis::CalendarV3::AUTH_CALENDAR
+CONFIG_PATH = "config.json".freeze
 
 ##
 # Ensure valid credentials, either by restoring from the saved credentials
@@ -57,6 +61,7 @@ end
 
 def extract_calendar(uri)
   calendar_id = uri.split(File::SEPARATOR)[6]
+  calendar_id = URI.decode_www_form_component(calendar_id)
   return calendar_id
 end
 
@@ -68,6 +73,7 @@ def file_store(response)
 end
 
 def log_output(event)
+  puts "ログを出力します．"
   hash = Hash.new{ |h, k| h[k] = {} }
   history = []
 
@@ -82,32 +88,164 @@ def log_output(event)
 
   event.items.each do |e|
     File.open("calmana.log", "a") do |f|
-
+      time = DateTime.now
       same_events = history.select{ |r| r["id"] == e.id }
       same_events = same_events.sort_by {|h| h["updated"] }
       reference = same_events.last
 
-      # if reference.nil?
-      #   puts "No same_events"
-      #   break
-      # end
-
       # 操作日時の取得
-      time = DateTime.now
-
+      if e.start
+        if e.start.date_time
+          start = e.start.date_time
+        else
+          start = e.start.date
+        end
+      end
+      if reference.nil?
+        summary = e.summary
+        ref_start = start
+      else
+        summary = reference['summary']
+        if reference["start"]
+          if reference["start"]["date_time"]
+            ref_start = reference["start"]["date_time"]
+          else
+            ref_start = reference["start"]["date"]
+          end
+        else
+          ref_start = start
+        end
+      end
       # 操作内容の判定
       if e.status == "cancelled"
-        f.puts("#{time}, #{e.id}, delete")
+        f.puts("#{time}に予定`#{summary}`が削除されました．")
         break
       elsif ((e.updated - e.created) * 24 * 60 * 60).to_i < 1
-        f.puts("#{time}, #{e.id}, create")
+        f.puts("#{time}に予定`#{e.summary}`が作成されました")
         break
       elsif e.summary != reference["summary"]
-        f.puts("#{time}, #{e.id}, update, summary")
-      elsif e.start != reference["start"]
-        f.puts("#{time}, #{e.id}, update, start_time")
+        f.puts("#{time}に予定`#{reference['summary']}`のタイトルが`#{e.summary}`に変更されました．")
+      elsif e.status != reference["status"]
+        f.puts("#{time}に予測結果`#{e.summary}`が確定されました．")
+      elsif e.start != ref_start
+        f.puts("#{time}に予定`#{e.summary}`の開始時刻が#{start}に変更されました．")
       else
-        f.puts("#{time}, #{e.id}, undefined")
+        f.puts("#{time}に予定`#{e.summary}`に操作が行われました．")
+      end
+
+      if e.color_id.nil? && e.status == "tentative"
+        e.status = "confirmed"
+        @service.update_event(@calendar_id, e.id, e)
+      end
+    end
+  end
+  puts "ログを出力しました．"
+end
+
+def get_events()
+  i = 0
+  page_token = nil
+  begin
+    file_name = "origin#{i}"
+    result = @service.list_events(@calendar_id, page_token: page_token)
+    File.open("result/#{file_name}.json","w") do |f|
+      JSON.dump(result, f)
+    end
+    if result.next_page_token != page_token
+      page_token = result.next_page_token
+    else
+      page_token = nil
+    end
+    i += 1
+  end while !page_token.nil?
+end
+
+def tentative_events_delete(recurrence)
+  puts "未確定の予定を削除します．"
+  page_token = nil
+  begin
+    result = @service.list_events(@calendar_id,
+                                  page_token: page_token,
+                                  order_by: "starttime",
+                                  single_events: true,
+                                  #time_min: Date.today.prev_year(2),
+                                  shared_extended_property: "recurrence_name=#{recurrence}"
+                                 )
+    result.items = result.items.select{|r| r.status == "tentative"}
+    result.items.each do |r|
+      @service.delete_event(@calendar_id, r.id)
+    end
+    if result.next_page_token != page_token
+      page_token = result.next_page_token
+    else
+      page_token = nil
+    end
+  end while !page_token.nil?
+  puts "削除しました．"
+end
+
+def post_heron_event(events, recurrence)
+  puts "再予測結果を登録します．"
+  events.split(/\R/).each do |e|
+    event = Google::Apis::CalendarV3::Event.new(
+      summary: recurrence,
+      start: Google::Apis::CalendarV3::EventDateTime.new(
+        date: e.chop,
+      ),
+      end: Google::Apis::CalendarV3::EventDateTime.new(
+        date: e.chop,
+      ),
+      color_id: "1",
+      status: "tentative",
+      extended_properties: Google::Apis::CalendarV3::Event::ExtendedProperties.new(
+        shared: {
+          recurrence_name: recurrence
+        }
+      )
+    )
+    result = @service.insert_event(@calendar_id, event)
+  end
+  puts "登録が完了しました．"
+end
+
+def heron(response)
+  response.items.each do |e|
+    if e.status != "tentative" && e.extended_properties
+      puts "再予測します．少々お待ちください．"
+      recurrence = e.extended_properties.shared["recurrence_name"]
+      page_token = nil
+      command = "./target/release/heron forecast --forecast-year #{Date.today.year}\n"
+      arg = ""
+      begin
+        result = @service.list_events(@calendar_id,
+                                      page_token: page_token,
+                                      order_by: "starttime",
+                                      single_events: true,
+                                      #time_min: Date.today.prev_year(2),
+                                      shared_extended_property: "recurrence_name=#{e.extended_properties.shared["recurrence_name"]}"
+                                     )
+        result.items = result.items.select{|r| r.status == "confirmed"}
+        result.items.each do |r|
+          if r.start.date_time
+            date = r.start.date_time.strftime("%Y-%m-%d")
+          else
+            date = r.start.date.strftime("%Y-%m-%d")
+          end
+          arg <<  date << "\n"
+        end
+        if result.next_page_token != page_token
+          page_token = result.next_page_token
+        else
+          page_token = nil
+        end
+      end while !page_token.nil?
+      arg << "EOF\n"
+      Dir.chdir(Dir.pwd + "/../heron-Rust/") do
+        (status, stdout, stderr) = Open3.capture3(command, :stdin_data=>arg)
+        puts "予測が完了しました．"
+        tentative_events_delete(recurrence)
+        post_heron_event(status, recurrence)
+
       end
     end
   end
@@ -118,6 +256,14 @@ before do
   @service = Google::Apis::CalendarV3::CalendarService.new
   @service.client_options.application_name = APPLICATION_NAME
   @service.authorization = authorize
+
+  File.open(CONFIG_PATH) do |f|
+    hash = JSON.load(f)
+    @calendar_id = hash["calendar_id"]
+  end
+
+  get_events()
+  
 end
 
 get '/' do
@@ -134,24 +280,15 @@ post '/watch' do
 
   ## 予定の変更が行われたときの処理
   if headers["HTTP_X_GOOG_RESOURCE_STATE"] == "exists"
-    # カレンダID を取得
-    calendar_id = extract_calendar(headers["HTTP_X_GOOG_RESOURCE_URI"])
-
-    puts "Event is changed in #{calendar_id}."
-    #id = headers["HTTP_X_GOOG_CHANNEL_ID"]
-    #resource_id = headers["HTTP_X_GOOG_RESOURCE_ID"]
-    #stop_channel(id, resource_id)
+    puts "Event is changed in #{@calendar_id}."
 
     # next_sync_token, expiration が保存された config.json を読み込み
     File.open("config.json") do |f|
       hash = JSON.load(f)
     end
 
-    # カレンダID を取得
-    calendar_id = extract_calendar(headers["HTTP_X_GOOG_RESOURCE_URI"])
-
     # 変更された予定を取得
-    response = @service.list_events(calendar_id,
+    response = @service.list_events(@calendar_id,
                                     sync_token: hash["next_sync_token"])
 
     # 変更内容をログに出力
@@ -159,6 +296,9 @@ post '/watch' do
 
     # 変更された予定をファイル保存
     file_store(response)
+
+    # heron の予測結果を確定したなら再予測
+    heron(response)
 
     # config.json の next_sync_token を書き換え
     hash["next_sync_token"] = response.next_sync_token
@@ -170,6 +310,10 @@ post '/watch' do
   elsif headers["HTTP_X_GOOG_RESOURCE_STATE"] == "sync"
     # カレンダID を取得
     calendar_id = extract_calendar(headers["HTTP_X_GOOG_RESOURCE_URI"])
+
+    headers.each do |k, v|
+      puts "#{k} -> #{v}"
+    end
 
     puts "Channel is made in #{calendar_id}"
 
