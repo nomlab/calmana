@@ -9,6 +9,7 @@
 + 機能
   + 変更が行われた予定のデータを取得・保存
   + 過去の変更履歴からユーザの操作を推測
+  + heron との連携による年間カレンダの生成
 
 ## Setup
 + Clone code
@@ -43,14 +44,21 @@
   ```
   bundle exec ruby channel.rb make <calendar ID>
   ```
-  + 現時点では作成可能なチャンネルは一つのみ（今後改善予定）
+  + 現時点では作成可能なチャンネルは一つのみ（需要があるかはともかく，複数のカレンダを監視できるようにしたい）
   
-+ 変更された予定の情報は `result/` 以下に保存
++ 変更された予定の情報は `result/` 以下に保存(ディレクトリ名おかしいから要改名)
 
 + チャンネルの削除
   + 監視するカレンダの calendar id を指定して実行
   ```
   bundle exec ruby channel.rb make <calendar ID>
+  ```
+  
++ heron と連携する場合
+  + [heron](https://github.com/nomlab/heron-Rust) の環境構築
+  + コンパイルしてバイナリファイルを生成
+  ```
+  cargo build
   ```
   
 ### or
@@ -60,11 +68,10 @@
   sh scripts/launch.sh start
   ```
   
-## 今後の実装予定
+## 今後の予定
 + `settings.yml` から CALLBACK URL など必要な情報の読み込み
 + Channel の複数作成への対応
 + 実行スクリプトの作成
-+ 予測部 heron との連携
 
 # HTTPS の設定
 + 前提
@@ -83,7 +90,22 @@
     証明書の取得に成功すると，証明書のファイルが`/etc/letsencrypt/live/<ドメイン名>/`以下に生成される
     
   + Apache の設定を編集
-    + fib
+    ```
+    <VirtualHost *:443>
+            ServerName <Domain name>
+    
+            SSLEngine on
+            SSLProxyEngine on
+    
+            ProxyPass / <Application URL>
+            ProxyPassReverse / <Application URL>
+    
+            SSLCertificateFile /etc/letsencrypt/live/<Domain name>/fullchain.pem
+            SSLCertificateKeyFile /etc/letsencrypt/live/<Domain name>/privkey.pem
+    
+            ErrorLog ${APACHE_LOG_DIR}/calmana_error.log
+            CustomLog ${APACHE_LOG_DIR}/calmana_access.log combined
+    </VirtualHost>
+    ```
 
   + Apache の設定を再読込
-    + fib
