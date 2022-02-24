@@ -70,6 +70,7 @@
   
 ## 今後の予定
 + `settings.yml` から CALLBACK URL など必要な情報の読み込み
++ Channel の更新(期限切れの Channel の削除，新規 Channel の作成)の自動化
 + Channel の複数作成への対応
 + 実行スクリプトの作成
 
